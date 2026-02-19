@@ -249,6 +249,7 @@ function createSaaSApp() {
 
   app.post('/api/auth/webauthn/register/options', async (req, res) => {
     const userId = String(req.body.userId || '');
+    const authenticatorType = String(req.body.authenticatorType || 'cross-platform');
     if (!validateUserId(userId)) return res.status(400).json({ error: 'Invalid userId.' });
 
     const user = db.getUser(userId);
@@ -269,6 +270,7 @@ function createSaaSApp() {
       attestationType: 'none',
       excludeCredentials: existing,
       authenticatorSelection: {
+        authenticatorAttachment: authenticatorType === 'platform' ? 'platform' : 'cross-platform',
         residentKey: 'preferred',
         userVerification: 'preferred'
       }
@@ -314,6 +316,9 @@ function createSaaSApp() {
     if (!validateUserId(userId)) return res.status(400).json({ error: 'Invalid userId.' });
 
     const credentials = db.getCredentialsByUser(userId);
+    if (credentials.length === 0) {
+      return res.status(400).json({ error: 'No passkey registered. Register one first.' });
+    }
     const options = await generateAuthenticationOptions({
       rpID: RP_ID,
       timeout: 60000,
@@ -358,6 +363,16 @@ function createSaaSApp() {
         success: verification.verified,
         method: 'webauthn'
       });
+
+      if (verification.verified) {
+        db.upsertCredential({
+          userId,
+          credentialId: authenticator.credentialId,
+          publicKey: authenticator.publicKey,
+          counter: verification.authenticationInfo.newCounter,
+          transports: authenticator.transports
+        });
+      }
 
       activeChallenges.delete(`auth:${userId}`);
       return res.json({ verified: verification.verified });
