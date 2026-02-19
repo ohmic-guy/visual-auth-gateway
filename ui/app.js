@@ -207,6 +207,10 @@ function normalizeAuthenticationOptions(options) {
 }
 
 function serializeCredential(rawCredential) {
+  if (typeof rawCredential.toJSON === 'function') {
+    return rawCredential.toJSON();
+  }
+
   return {
     id: rawCredential.id,
     rawId: bufferToBase64Url(rawCredential.rawId),
@@ -225,6 +229,9 @@ function serializeCredential(rawCredential) {
         : undefined,
       userHandle: rawCredential.response.userHandle
         ? bufferToBase64Url(rawCredential.response.userHandle)
+        : undefined,
+      transports: typeof rawCredential.response.getTransports === 'function'
+        ? rawCredential.response.getTransports()
         : undefined
     },
     authenticatorAttachment: rawCredential.authenticatorAttachment
