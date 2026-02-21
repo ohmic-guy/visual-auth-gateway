@@ -3,8 +3,10 @@ const path = require('path');
 const Database = require('better-sqlite3');
 const { generateHintBundle, buildHintLevels } = require('./ai-engine');
 
-const DB_PATH = path.join(__dirname, 'visualauth.db');
+const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'visualauth.db');
 const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
+
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');

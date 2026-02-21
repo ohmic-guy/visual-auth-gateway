@@ -17,12 +17,48 @@ const { generateHintBundle } = require('./ai-engine');
 
 const SaaSPort = Number(process.env.PORT || 3000);
 const BANK_PORT = Number(process.env.BANK_PORT || 8080);
-const SESSION_TTL_MS = 60_000;
+const NODE_ENV = process.env.NODE_ENV || 'development';
+
+function parseList(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseBoolean(value, fallback = false) {
+  if (value === undefined) return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
+}
+
+const PUBLIC_SAAS_ORIGIN = process.env.PUBLIC_SAAS_ORIGIN || `http://localhost:${SaaSPort}`;
+const PUBLIC_BANK_ORIGIN = process.env.PUBLIC_BANK_ORIGIN || `http://localhost:${BANK_PORT}`;
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 60_000);
+const SESSION_SECURE_COOKIES = parseBoolean(process.env.SESSION_SECURE_COOKIES, NODE_ENV === 'production');
+const SESSION_SAME_SITE = process.env.SESSION_SAME_SITE || 'lax';
+const TRUST_PROXY = parseBoolean(process.env.TRUST_PROXY, NODE_ENV === 'production');
+const parsedCorsOrigins = parseList(process.env.ALLOWED_CORS_ORIGINS);
+const parsedReturnOrigins = parseList(process.env.ALLOWED_RETURN_ORIGINS);
+const parsedRpIds = parseList(process.env.ALLOWED_RP_IDS);
+
+const ALLOWED_CORS_ORIGINS = new Set(
+  parsedCorsOrigins.length > 0
+    ? parsedCorsOrigins
+    : [PUBLIC_SAAS_ORIGIN, PUBLIC_BANK_ORIGIN]
+);
+
+const ALLOWED_RETURN_ORIGINS = new Set(
+  parsedReturnOrigins.length > 0
+    ? parsedReturnOrigins
+    : [PUBLIC_BANK_ORIGIN]
+);
 
 const RP_NAME = 'VisualAuth SaaS';
-const RP_ID = process.env.RP_ID || 'localhost';
-const EXPECTED_ORIGIN = process.env.EXPECTED_ORIGIN || `http://localhost:${SaaSPort}`;
-const ALLOWED_RP_IDS = new Set((process.env.ALLOWED_RP_IDS || 'localhost,127.0.0.1').split(',').map((v) => v.trim()).filter(Boolean));
+const RP_ID = process.env.RP_ID || new URL(PUBLIC_SAAS_ORIGIN).hostname;
+const EXPECTED_ORIGIN = process.env.EXPECTED_ORIGIN || PUBLIC_SAAS_ORIGIN;
+const ALLOWED_RP_IDS = new Set(
+  parsedRpIds.length > 0 ? parsedRpIds : [RP_ID, 'localhost', '127.0.0.1']
+);
 
 db.init();
 
@@ -44,8 +80,7 @@ function sanitizeReturnUrl(returnUrl) {
   if (!returnUrl) return '';
   try {
     const parsed = new URL(returnUrl);
-    const allowedOrigin = `http://localhost:${BANK_PORT}`;
-    return parsed.origin === allowedOrigin ? parsed.toString() : '';
+    return ALLOWED_RETURN_ORIGINS.has(parsed.origin) ? parsed.toString() : '';
   } catch (_error) {
     return '';
   }
@@ -100,9 +135,17 @@ function parsePasswordRecord(password) {
 
 function createSaaSApp() {
   const app = express();
+  if (TRUST_PROXY) {
+    app.set('trust proxy', 1);
+  }
   app.use(
     cors({
-      origin: ['http://localhost:8080', `http://localhost:${SaaSPort}`],
+      origin: (origin, callback) => {
+        if (!origin || ALLOWED_CORS_ORIGINS.has(origin)) {
+          return callback(null, true);
+        }
+        return callback(new Error('CORS origin not allowed'));
+      },
       credentials: true
     })
   );
@@ -115,7 +158,8 @@ function createSaaSApp() {
       cookie: {
         maxAge: SESSION_TTL_MS,
         httpOnly: true,
-        sameSite: 'lax'
+        secure: SESSION_SECURE_COOKIES,
+        sameSite: SESSION_SAME_SITE
       }
     })
   );
@@ -266,7 +310,7 @@ function createSaaSApp() {
         timestamp: new Date().toISOString()
       };
       req.session.authChallenge = null;
-      const fallbackRedirect = `http://localhost:${BANK_PORT}/dashboard.html?userId=${challenge.userId}`;
+      const fallbackRedirect = `${PUBLIC_BANK_ORIGIN}/dashboard.html?userId=${encodeURIComponent(challenge.userId)}`;
       const redirectUrl = challenge.returnUrl || fallbackRedirect;
       return res.json({ success: true, redirectUrl });
     }
@@ -512,7 +556,7 @@ function createSaaSApp() {
 
     if (!verified) return res.status(401).json({ success: false, error: 'Invalid authenticator code.' });
 
-    const fallbackRedirect = `http://localhost:${BANK_PORT}/dashboard.html?userId=${encodeURIComponent(userId)}`;
+    const fallbackRedirect = `${PUBLIC_BANK_ORIGIN}/dashboard.html?userId=${encodeURIComponent(userId)}`;
     return res.json({ success: true, redirectUrl: returnUrl || fallbackRedirect });
   });
 
@@ -624,9 +668,9 @@ const saasApp = createSaaSApp();
 const bankApp = createBankApp();
 
 saasApp.listen(SaaSPort, () => {
-  console.log(`VisualAuth SaaS running on http://localhost:${SaaSPort}`);
+  console.log(`VisualAuth SaaS running on ${PUBLIC_SAAS_ORIGIN}`);
 });
 
 bankApp.listen(BANK_PORT, () => {
-  console.log(`Bank client running on http://localhost:${BANK_PORT}`);
+  console.log(`Bank client running on ${PUBLIC_BANK_ORIGIN}`);
 });
